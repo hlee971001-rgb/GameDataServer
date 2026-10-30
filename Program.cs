@@ -25,6 +25,18 @@ using (var conn = new SqliteConnection(connectionString))
         """;
     create.ExecuteNonQuery();
 
+    // ── 3회차. 점수 표 — 몬스터 표 옆에 하나 더. 씨앗은 없다. 처음엔 비어 있다 ──
+    var createScores = conn.CreateCommand();
+    createScores.CommandText = """
+        CREATE TABLE IF NOT EXISTS scores (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            player     TEXT    NOT NULL,
+            score      INTEGER NOT NULL,
+            created_at TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """;
+    createScores.ExecuteNonQuery();
+
     // 테이블이 비어 있을 때만 1회차의 monsters.json을 씨앗으로 넣는다. 그래서 재시작해도 중복되지 않는다
     var count = conn.CreateCommand();
     count.CommandText = "SELECT COUNT(*) FROM monsters";
@@ -175,7 +187,46 @@ app.MapGet("/monsters/big", (int count = 20000) =>
     return new { monsters = big };
 });
 
-var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
+// ── 3회차. 점수 등록 — POST는 "받아라". 본문의 JSON이 ScoreEntry로 들어오고 scores 표에 INSERT ──
+app.MapPost("/scores", (ScoreEntry entry) =>
+{
+    if (string.IsNullOrWhiteSpace(entry.Player) || entry.Score < 0)
+        return Results.BadRequest(new { error = "player는 비어 있으면 안 되고 score는 0 이상이어야 합니다." });
+
+    using var conn = new SqliteConnection(connectionString);
+    conn.Open();
+    var cmd = conn.CreateCommand();
+    cmd.CommandText = """
+        INSERT INTO scores (player, score) VALUES ($player, $score);
+        SELECT last_insert_rowid();
+        """;
+    cmd.Parameters.AddWithValue("$player", entry.Player.Trim());
+    cmd.Parameters.AddWithValue("$score", entry.Score);
+    entry.Id = (int)(long)cmd.ExecuteScalar()!;   // DB가 붙여 준 새 번호
+    return Results.Created("/scores", entry);     // 201 Created + 등록된 점수
+});
+
+// ── 3회차. 랭킹 — GET은 "달라". 점수 높은 순으로 top개를 SELECT하고 순위를 붙인다 ──
+app.MapGet("/scores", (int top = 10) =>
+{
+    top = Math.Clamp(top, 1, 100);   // 너무 크거나 작은 top은 1~100으로 맞춘다
+
+    using var conn = new SqliteConnection(connectionString);
+    conn.Open();
+    var cmd = conn.CreateCommand();
+    cmd.CommandText = "SELECT player, score FROM scores ORDER BY score DESC, id ASC LIMIT $top";
+    cmd.Parameters.AddWithValue("$top", top);
+    using var reader = cmd.ExecuteReader();
+
+    var ranking = new List<RankEntry>();
+    while (reader.Read())   // 점수 높은 순으로 한 줄씩. 순위는 읽은 순서대로 붙인다
+    {
+        ranking.Add(new RankEntry { Rank = ranking.Count + 1, Player = reader.GetString(0), Score = reader.GetInt32(1) });
+    }
+    return new { scores = ranking };
+});
+
+var port =Environment.GetEnvironmentVariable("PORT") ?? "5000";
 app.Run($"http://0.0.0.0:{port}");
 
 // ── 데이터 모양 — 1회차와 같다 ─────────────────────────────────────────
@@ -186,4 +237,18 @@ class Monster
     public int Hp { get; set; }
     public int Attack { get; set; }
     public float Speed { get; set; }
+}
+
+class ScoreEntry           // POST /scores가 받는 모양. id는 서버가 붙인다
+{
+    public int Id { get; set; }
+    public string Player { get; set; } = "";
+    public int Score { get; set; }
+}
+
+class RankEntry            // GET /scores가 돌려주는 한 줄
+{
+    public int Rank { get; set; }
+    public string Player { get; set; } = "";
+    public int Score { get; set; }
 }
