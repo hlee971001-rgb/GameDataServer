@@ -296,8 +296,10 @@ app.MapGet("/monsters/big", (int count = 20000) =>
 });
 
 // ── 3회차. 점수 등록 — POST는 "받아라". 본문의 JSON이 ScoreEntry로 들어오고 scores 표에 INSERT ──
-app.MapPost("/scores", (ScoreEntry entry) =>
+// 3회차 인증 과제: 토큰이 있어야 등록된다. 이름은 본문이 아니라 서버가 서명을 확인한 토큰의 sub에서 꺼낸다
+app.MapPost("/scores", (ScoreEntry entry, ClaimsPrincipal user) =>   // ← user: 검사를 통과한 토큰의 주인
 {
+    entry.Player = user.FindFirst("sub")?.Value ?? "";   // ← 본문의 player는 무시한다 (아무 이름이나 적을 수 있으므로)
     if (string.IsNullOrWhiteSpace(entry.Player) || entry.Score < 0)
         return Results.BadRequest(new { error = "player는 비어 있으면 안 되고 score는 0 이상이어야 합니다." });
 
@@ -312,7 +314,7 @@ app.MapPost("/scores", (ScoreEntry entry) =>
     cmd.Parameters.AddWithValue("$score", entry.Score);
     entry.Id = (int)(long)cmd.ExecuteScalar()!;   // DB가 붙여 준 새 번호
     return Results.Created("/scores", entry);     // 201 Created + 등록된 점수
-});
+}).RequireAuthorization();   // ← 3회차 인증 과제: 토큰이 없거나 틀리면 401
 
 // ── 3회차. 랭킹 — GET은 "달라". 점수 높은 순으로 top개를 SELECT하고 순위를 붙인다 ──
 app.MapGet("/scores", (int top = 10) =>
